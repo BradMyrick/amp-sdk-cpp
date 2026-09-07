@@ -1,0 +1,40 @@
+name: AmpUnreal CI
+
+on:
+  push:
+    paths: ["AmpUnreal/**", ".github/workflows/ampunreal.yml"]
+  pull_request:
+    paths: ["AmpUnreal/**", ".github/workflows/ampunreal.yml"]
+  workflow_dispatch:
+
+jobs:
+  # Fast, always runs: the vendored protocol core under UE build flags
+  ampcore:
+    name: AmpCore (UE flags + golden vectors)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and validate under -fno-exceptions -fno-rtti
+        run: |
+          cd AmpUnreal/Source/AmpUnreal/Private/AmpCore
+          g++ -std=c++17 -fno-exceptions -fno-rtti -Wall -I. \
+            $GITHUB_WORKSPACE/.github/ampcore_check.cpp AmpCore.cpp Keccak256.cpp \
+            -o /tmp/ampcore_check
+          /tmp/ampcore_check
+
+  # Full engine compile via UnrealBuildTool (game.ci engine image)
+  plugin:
+    name: Build plugin (Linux, UE 5.4)
+    runs-on: ubuntu-latest
+    container: ghcr.io/game-ci/unreal-engine:5.4.3
+    steps:
+      - name: Free disk space for the engine image
+        run: rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+      - uses: actions/checkout@v4
+      - name: RunUAT BuildPlugin
+        run: |
+          cd /home/ue4/UnrealEngine/Engine/Build/BatchFiles
+          ./RunUAT.sh BuildPlugin \
+            -Plugin="$GITHUB_WORKSPACE/AmpUnreal/AmpUnreal.uplugin" \
+            -Package="/tmp/AmpUnreal-out" \
+            -TargetPlatforms=Linux
