@@ -180,6 +180,21 @@ int main() {
         CHECK("zero stake + empty salt works", h0.length() == 66);
     }
 
+    // ── Cross-SDK golden vector ───────────────────────────────
+    {
+        printf("\n── Cross-SDK Golden Vector ──\n");
+
+        // Identical in the TS/C#/C++/Rust SDKs and amp-server:
+        // keccak256(addr20 ‖ stake_u64_be(8) ‖ salt-utf8)
+        auto golden = computeCommitHash(
+            "0x95CC495dF579981d3Ffa4a8f77B93A17563E077a",
+            1000000000000000ULL, "0xdeadbeef");
+        std::string goldenLower = golden;
+        for (auto& c : goldenLower) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        CHECK("commit hash matches cross-SDK golden vector",
+              goldenLower == "0x2d5491f1ad0117eea0c302b3cfb07590fef2d3892349e017361afd1bb5e5be10");
+    }
+
     // ── Exit certificate message ──────────────────────────────
     {
         printf("\n── Exit Certificate Message ──\n");
