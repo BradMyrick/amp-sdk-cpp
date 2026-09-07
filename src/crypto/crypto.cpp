@@ -57,6 +57,16 @@ std::string buildReportMessage(const std::string& matchId, const std::string& re
     return "AMP_REPORT:v1:" + matchId + ":" + result;
 }
 
+std::string buildExitCertMessage(const std::string& matchId, int rank,
+                                 uint64_t exitFrame, const std::string& stateHash) {
+    return "AMP exit certificate\n\n"
+           "Match: " + matchId + "\n"
+           "Rank: " + std::to_string(rank) + "\n"
+           "Exit frame: " + std::to_string(exitFrame) + "\n"
+           "State hash: " + stateHash + "\n\n"
+           "This signature is free. It certifies your elimination and unlocks your reporting bond.";
+}
+
 std::string computeCommitHash(const std::string& wallet, uint64_t stakeWei, const std::string& salt) {
     // keccak256(address ‖ stake ‖ salt)
     auto addr = fromHex(wallet);

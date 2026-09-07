@@ -1,88 +1,118 @@
 /**
- * AMP SDK — Quick Start Example
+ * AMP SDK — Quick Start Example (runnable)
  *
- * Shows the full lifecycle: login → queue → match → report → result.
- * Copy the parts you need into your game (Unreal, native, etc.)
+ * The full 1v1 lifecycle against the production matchmaker:
+ * login → queue → bot match → report → result.
+ *
+ * Copy the parts you need into your game (Unreal, native, etc).
+ *
+ * Build & run:
+ *   mkdir build && cd build
+ *   cmake .. -DCMAKE_BUILD_TYPE=Release && make
+ *   AMP_TEST_KEY=0x... ./quick_start
  */
 
 #include "amp/client.hpp"
-#include "amp/types.hpp"
+#include "amp/signers/private_key_signer.hpp"
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <thread>
-#include <chrono>
 
 using namespace amp;
 
-// ═══════════════════════════════════════════════════════════════
-// OPTION A: Server-side game (private key signer)
-// ═══════════════════════════════════════════════════════════════
-//
-// #include "amp/signers/private_key_signer.hpp"
-// auto signer = std::make_shared<PrivateKeySigner>(privateKeyHex);
-// AMPClient amp("https://amp.playwithamp.xyz", signer);
-//
-// ═══════════════════════════════════════════════════════════════
-// OPTION B: Unreal Engine game
-// ═══════════════════════════════════════════════════════════════
-//
-// In Unreal, use the AmpUnreal plugin which wraps AMPClient with
-// Blueprint nodes and UE's native HTTP/WebSocket modules.
-//
-// UAMPSubsystem* amp = GetGameInstance()->GetSubsystem<UAMPSubsystem>();
-// amp->Login();
-// amp->JoinQueue("amp-tactics", "ranked-1v1");
+static std::string loadKey() {
+    if (const char* env = getenv("AMP_TEST_KEY"))
+        return env;
+    // Fallback: local e2e wallet file
+    std::ifstream f("/tmp/opencode/e2e-wallets/wallets.json");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string j = ss.str();
+    auto pos = j.find("\"key\"");
+    auto colon = j.find(':', pos);
+    auto q1 = j.find('"', colon + 1);
+    auto q2 = j.find('"', q1 + 1);
+    return j.substr(q1 + 1, q2 - q1 - 1);
+}
+
+static std::string field(const std::string& body, const char* name) {
+    auto pos = body.find(std::string("\"") + name + "\"");
+    if (pos == std::string::npos) return "";
+    auto colon = body.find(':', pos);
+    auto p = body.find_first_not_of(" \t", colon + 1);
+    if (p == std::string::npos || body[p] != '"') return ""; // null/non-string
+    auto q2 = body.find('"', p + 1);
+    return body.substr(p + 1, q2 - p - 1);
+}
 
 int main() {
-    printf("AMP SDK Quick Start\n");
-    printf("===================\n\n");
+  try {
+    std::string key = loadKey();
+    if (key.size() != 66) {
+        printf("set AMP_TEST_KEY to a funded private key\n");
+        return 1;
+    }
 
-    // 1. Create the client
-    //    For server-side: use PrivateKeySigner
-    //    For custodial: implement ICustodialProvider
-    //    For Unreal: use the AmpUnreal plugin
-    printf("1. Create AMPClient with your server URL and signer\n");
-    printf("   auto amp = AMPClient(\"https://amp.playwithamp.xyz\", signer);\n\n");
+    // 1. Create the client with a signer
+    auto signer = std::make_shared<PrivateKeySigner>(key);
+    AMPClient amp("https://amp.playwithamp.xyz", signer);
 
-    // 2. Login (one gasless signature)
-    printf("2. Login — one gasless EIP-191 signature\n");
-    printf("   auto player = amp.login();\n");
-    printf("   // Internally: challenge → sign → verify → 7-day session token\n\n");
+    // 2. Login — one gasless EIP-191 signature
+    //    (challenge → sign → verify → 7-day session token)
+    Player player = amp.login();
+    printf("logged in: %s\n\n", player.wallet.c_str());
 
-    // 3. Check available games
-    printf("3. Check games\n");
-    printf("   auto games = amp.games();\n");
-    printf("   // Returns JSON: [{id, name, rulesets: [{id, name, queueDepth}]}]\n\n");
+    // 3. See what's available
+    std::string games = amp.games();
+    printf("games: %.120s…\n\n", games.c_str());
 
-    // 4. Join a ranked queue
-    printf("4. Join queue\n");
-    printf("   auto result = amp.joinQueue(\"amp-tactics\", \"ranked-1v1\");\n");
-    printf("   // Skill window starts at ±350 MMR and widens +8/sec\n\n");
+    // 4. Session resume: if we already have a live match (crash,
+    //    reconnect, stale client), continue it instead of re-queueing
+    std::string meJson = amp.me();
+    std::string liveId = field(meJson, "liveMatchId");
+    std::string matchId;
+    if (!liveId.empty()) {
+        matchId = liveId;
+        printf("resuming live match: %s\n\n", matchId.c_str());
+    }
 
-    // 5. Listen for matches (WebSocket)
-    printf("5. Listen for match\n");
-    printf("   amp.events().on(EventType::MatchFound, [](const std::string& json) {\n");
-    printf("       // Parse JSON, start your game\n");
-    printf("   });\n\n");
+    // 5. Otherwise: join a ranked queue
+    if (matchId.empty()) {
+    amp.joinQueue("amp-tactics", "ranked-1v1");
+    printf("queued — waiting for an opponent…\n");
 
-    // 6. Report the result
-    printf("6. Report result (auto-signs)\n");
-    printf("   amp.reportMatch(matchId, \"win\");\n");
-    printf("   // Signs EIP-191: AMP_REPORT:v1:{matchId}:{result}\n\n");
+    // 6. Wait for a human opponent (REST polling convenience — the
+    //    AmpWebSocket gives you push events for production UIs), falling
+    //    back to a bot when nobody is online:
+    try {
+        matchId = amp.waitForMatch(10000);
+        printf("match found: %s\n\n", matchId.c_str());
+    } catch (const Error&) {
+        printf("no human opponent in 10s — playing a bot instead\n");
+        amp.leaveQueue();
+        std::string bot = amp.playBot();
+        matchId = field(bot, "matchId");
+        printf("bot match: %s\n\n", matchId.c_str());
+    }
+    } // end queue branch
 
-    // 7. Listen for the result (rating update)
-    printf("7. Listen for result\n");
-    printf("   amp.events().on(EventType::MatchResult, [](const std::string& json) {\n");
-    printf("       // Rating: 1500 → 1552\n");
-    printf("   });\n\n");
+    // 7. (your game runs here — QuickDraw, Tactics, whatever you built)
 
-    printf("What AMP handles vs what you handle:\n");
-    printf("  AMP: skill ratings, matchmaking, match assignment,\n");
-    printf("       result verification, on-chain escrow, anti-collusion\n");
-    printf("  You: determining who won, running the game, UI/UX\n\n");
+    // 8. Report the result — auto-signs EIP-191
+    std::string rep = amp.reportMatch(matchId, "win");
+    printf("reported: %.100s\n\n", rep.c_str());
 
-    printf("Full API: login, games, queue (join/leave/status/bot),\n");
-    printf("  match (get/report/history), party (create/join/lock/disband),\n");
-    printf("  multiplayer (commit/reveal/report/claim), WebSocket events\n");
+    // 9. Check your rating moved
+    std::string me = amp.me();
+    printf("me: %.150s\n", me.c_str());
 
+    amp.logout();
+    printf("\ndone.\n");
     return 0;
+  } catch (const Error& e) {
+    printf("\nerror [%s]: %s\n", e.code.c_str(), e.message.c_str());
+    return 1;
+  }
 }

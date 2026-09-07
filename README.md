@@ -72,6 +72,22 @@ The SDK implements Keccak-256 (from Nayuki's MIT-licensed library) and EIP-712 t
 
 For Unreal Engine games, the `AmpUnreal` plugin (coming soon) wraps this SDK with Blueprint nodes and engine-native HTTP/WebSocket.
 
+## API
+
+| Method | Description |
+|---|---|
+| `login()` / `logout()` | Gasless wallet login (one EIP-191 signature) |
+| `me()`, `getPlayer(wallet)` | Player info + ratings |
+| `games()` | Available games + queue depth |
+| `joinQueue`, `leaveQueue`, `queueStatus`, `playBot` | Ranked queue |
+| `getMatch`, `matchHistory`, `reportMatch` | 1v1 matches (auto-signs EIP-191) |
+| `createParty`, `joinParty`, `getParty`, `lockParty`, `disbandParty` | Parties |
+| `multiCommit`, `multiReveal`, `getMultiMatch`, `multiReport`, `multiClaim` | N-player FFA (auto-signs EIP-712) |
+| `submitExitCert`, `countersignExitCert` | Death certs on elimination (auto-signs EIP-191) |
+| `verifyEscrow` | On-chain escrow check for staked 1v1 |
+| `waitForMatch(timeoutMs)` | One call: queue → wait → matchId |
+| `events()` | WebSocket push events (`AmpWebSocket`) |
+
 ## Build
 
 Requires CMake 3.16+, a C++17 compiler, and OpenSSL (dev headers).
@@ -95,7 +111,7 @@ cmake .. -DAMP_LIVE_TESTS=ON && make
 
 ## Tests
 
-51 tests covering:
+54 tests covering:
 - Keccak-256 known vectors (empty, "abc") + determinism
 - Salt generation (format, uniqueness)
 - Report message construction

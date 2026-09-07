@@ -51,6 +51,9 @@ endif()
 add_executable(quick_start examples/quick_start.cpp)
 target_link_libraries(quick_start PRIVATE amp-sdk)
 
+add_executable(multiplayer examples/multiplayer.cpp)
+target_link_libraries(multiplayer PRIVATE amp-sdk)
+
 # ── Installation ────────────────────────────────────────────
 
 include(GNUInstallDirs)

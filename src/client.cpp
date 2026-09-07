@@ -209,11 +209,15 @@ MultiCommitResult AMPClient::multiCommit(const std::string& gameId, uint64_t sta
     std::string salt = crypto::generateSalt();
     std::string commitHash = crypto::computeCommitHash(wallet_, stakeWei, salt);
 
-    auto body = requireOk(impl_->rest.post("/v1/multi/commit",
-                                           json::build({{"gameId", gameId},
-                                                        {"commitHash", commitHash},
-                                                        {"stakeWei", std::to_string(stakeWei)},
-                                                        {"lobbySize", std::to_string(lobbySize)}})),
+    // stakeWei and lobbySize must be JSON numbers (serde i64/usize), and
+    // stakeWei can exceed 2^53 — emit it precisely as an integer literal.
+    std::ostringstream commitBody;
+    commitBody << "{\"gameId\":\"" << json::escape(gameId) << "\""
+               << ",\"commitHash\":\"" << json::escape(commitHash) << "\""
+               << ",\"stakeWei\":" << stakeWei
+               << ",\"lobbySize\":" << lobbySize << "}";
+
+    auto body = requireOk(impl_->rest.post("/v1/multi/commit", commitBody.str()),
                           "multi/commit");
 
     MultiCommitResult out;
@@ -289,6 +293,59 @@ std::string AMPClient::multiReport(const std::string& matchId,
 std::string AMPClient::multiClaim(const std::string& matchId) {
     return requireOk(impl_->rest.post("/v1/multi/" + matchId + "/claim", "{}"),
                      "multi/claim");
+}
+
+// ── Exit certificates ──────────────────────────────────────────
+
+std::string AMPClient::submitExitCert(const std::string& matchId, int rank,
+                                      uint64_t exitFrame, const std::string& stateHash) {
+    std::optional<std::string> signature;
+    if (signer_ || custodial_) {
+        auto message = crypto::buildExitCertMessage(matchId, rank, exitFrame, stateHash);
+        signature = signer_
+            ? signer_->signPersonalSign(message)
+            : custodial_->signPersonalSign(player_id_, message);
+    }
+
+    return requireOk(impl_->rest.post("/v1/multi/" + matchId + "/exit",
+                                      json::build({{"rank", std::to_string(rank)},
+                                                   {"exitFrame", std::to_string(exitFrame)},
+                                                   {"stateHash", stateHash},
+                                                   {"signature", signature}})),
+                     "multi/exit");
+}
+
+std::string AMPClient::countersignExitCert(const std::string& matchId, const std::string& wallet,
+                                           const std::string& stateHash) {
+    return requireOk(impl_->rest.post("/v1/multi/" + matchId + "/exit/" + wallet,
+                                      json::build({{"stateHash", stateHash}})),
+                     "multi/exit/countersign");
+}
+
+// ── Escrow ─────────────────────────────────────────────────────
+
+std::string AMPClient::verifyEscrow(const std::string& matchId) {
+    return requireOk(impl_->rest.post("/v1/matches/" + matchId + "/escrow/verify", "{}"),
+                     "matches/escrow/verify");
+}
+
+// ── Convenience ─────────────────────────────────────────────────
+
+std::string AMPClient::waitForMatch(int timeoutMs) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        try {
+            auto meBody = me();
+            auto liveId = json::getString(meBody, "liveMatchId");
+            if (liveId && !liveId->empty() && *liveId != "null")
+                return *liveId;
+        } catch (const Error&) {
+            // transient — keep polling
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    }
+    throw Error("timeout", "waitForMatch: no match within " + std::to_string(timeoutMs) + "ms");
 }
 
 // ── Events ─────────────────────────────────────────────────────

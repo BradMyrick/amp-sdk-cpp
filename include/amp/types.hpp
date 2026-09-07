@@ -156,6 +156,11 @@ std::string generateSalt();
 /// Build the EIP-191 report message: "AMP_REPORT:v1:{matchId}:{result}"
 std::string buildReportMessage(const std::string& matchId, const std::string& result);
 
+/// Build the EIP-191 message for a multiplayer exit certificate (death cert).
+/// Must match the amp-server's submit_exit_cert format exactly.
+std::string buildExitCertMessage(const std::string& matchId, int rank,
+                                 uint64_t exitFrame, const std::string& stateHash);
+
 /// Compute keccak256(address ‖ stake ‖ salt) — commit-reveal hash.
 std::string computeCommitHash(const std::string& wallet, uint64_t stakeWei, const std::string& salt);
 

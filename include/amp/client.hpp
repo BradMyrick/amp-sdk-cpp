@@ -109,6 +109,27 @@ public:
 
     std::string multiClaim(const std::string& matchId);
 
+    // ── Exit certificates (multiplayer death certs) ────
+
+    /// Submit a death cert on elimination. Auto-signs EIP-191.
+    std::string submitExitCert(const std::string& matchId, int rank,
+                               uint64_t exitFrame, const std::string& stateHash);
+
+    /// Survivor verifies an eliminated player's exit cert.
+    std::string countersignExitCert(const std::string& matchId, const std::string& wallet,
+                                    const std::string& stateHash);
+
+    // ── Staked 1v1 escrow ──────────────────────────────
+
+    /// Verify on-chain escrow for a staked 1v1 match (flips to live).
+    std::string verifyEscrow(const std::string& matchId);
+
+    // ── Convenience ────────────────────────────────────
+
+    /// One call: queue → wait → matchId. Polls REST every 2s up to
+    /// timeoutMs. Returns the matchId; throws Error("timeout") on expiry.
+    std::string waitForMatch(int timeoutMs = 30000);
+
     // ── Events (WebSocket) ────────────────────────────
 
     AmpWebSocket& events();

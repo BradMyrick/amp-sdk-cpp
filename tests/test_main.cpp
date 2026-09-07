@@ -180,6 +180,24 @@ int main() {
         CHECK("zero stake + empty salt works", h0.length() == 66);
     }
 
+    // ── Exit certificate message ──────────────────────────────
+    {
+        printf("\n── Exit Certificate Message ──\n");
+
+        auto msg = buildExitCertMessage("m-42", 3, 1200, "0xabc");
+        std::string expected =
+            "AMP exit certificate\n\n"
+            "Match: m-42\n"
+            "Rank: 3\n"
+            "Exit frame: 1200\n"
+            "State hash: 0xabc\n\n"
+            "This signature is free. It certifies your elimination and unlocks your reporting bond.";
+        CHECK("exit cert message matches server format", msg == expected);
+        CHECK("exit cert mentions reporting bond", msg.find("reporting bond.") != std::string::npos);
+        CHECK("exit cert is rank-sensitive",
+              buildExitCertMessage("m", 1, 1, "0x") != buildExitCertMessage("m", 2, 1, "0x"));
+    }
+
     // ── Signer (OpenSSL secp256k1) ────────────────────────────
     {
         printf("\n── PrivateKeySigner ──\n");
