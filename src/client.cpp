@@ -307,11 +307,15 @@ std::string AMPClient::submitExitCert(const std::string& matchId, int rank,
             : custodial_->signPersonalSign(player_id_, message);
     }
 
-    return requireOk(impl_->rest.post("/v1/multi/" + matchId + "/exit",
-                                      json::build({{"rank", std::to_string(rank)},
-                                                   {"exitFrame", std::to_string(exitFrame)},
-                                                   {"stateHash", stateHash},
-                                                   {"signature", signature}})),
+    // rank/exitFrame must be JSON numbers (serde u16/u64 — strings 422)
+    std::ostringstream body;
+    body << "{\"rank\":" << rank
+         << ",\"exitFrame\":" << exitFrame
+         << ",\"stateHash\":\"" << json::escape(stateHash) << "\"";
+    if (signature) body << ",\"signature\":\"" << json::escape(*signature) << "\"";
+    body << "}";
+
+    return requireOk(impl_->rest.post("/v1/multi/" + matchId + "/exit", body.str()),
                      "multi/exit");
 }
 

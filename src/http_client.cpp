@@ -61,7 +61,13 @@ struct TlsGlobals {
         SSL_load_error_strings();
         OpenSSL_add_all_algorithms();
         ctx = SSL_CTX_new(TLS_client_method());
-        if (ctx) SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+        if (ctx) {
+            SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+            // Verify server certificates against the system trust store;
+            // fail closed on any verification problem.
+            SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+            SSL_CTX_set_default_verify_paths(ctx);
+        }
     }
     ~TlsGlobals() {
         if (ctx) SSL_CTX_free(ctx);
@@ -109,7 +115,10 @@ struct Connection {
             if (!ssl) { close(); return false; }
             SSL_set_fd(ssl, fd);
             SSL_set_tlsext_host_name(ssl, host.c_str());
+            // Pin the certificate to the hostname we dialed
+            SSL_set1_host(ssl, host.c_str());
             if (SSL_connect(ssl) != 1) { close(); return false; }
+            if (SSL_get_verify_result(ssl) != X509_V_OK) { close(); return false; }
         }
         return true;
     }

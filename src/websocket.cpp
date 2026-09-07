@@ -14,6 +14,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <cstring>
+#include <strings.h>
 #include <cerrno>
 #include <sstream>
 #include <random>
@@ -22,6 +23,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 
 namespace amp {
 
@@ -91,6 +93,44 @@ UrlParts parseWsUrl(const std::string& url) {
 }
 
 } // namespace
+
+// RFC 6455 §4.2.2: Sec-WebSocket-Accept == base64(SHA1(key + GUID))
+static bool validateAcceptKey(const std::string& headers, const std::string& key) {
+    static const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+    // Case-insensitive: RFC says Sec-WebSocket-Accept, tungstenite sends
+    // Sec-Websocket-Accept, proxies may lowercase entirely.
+    size_t pos = std::string::npos;
+    {
+        const char* needle = "ec-websocket-accept:";
+        const size_t n = strlen(needle);
+        for (size_t i = 0; i + n <= headers.size(); i++) {
+            if (strncasecmp(headers.data() + i, needle, n) == 0) { pos = i; break; }
+        }
+    }
+    if (pos == std::string::npos) return false;
+    pos = headers.find(':', pos);
+    auto eol = headers.find("\r\n", pos);
+    if (eol == std::string::npos) return false;
+    auto vstart = headers.find_first_not_of(" \t", pos + 1);
+    if (vstart == std::string::npos || vstart >= eol) return false;
+    std::string accept = headers.substr(vstart, eol - vstart);
+
+    uint8_t sha[SHA_DIGEST_LENGTH];
+    std::string cat = key + GUID;
+    SHA1(reinterpret_cast<const uint8_t*>(cat.data()), cat.size(), sha);
+
+    std::string out(64, '\0');
+    EVP_EncodeBlock(reinterpret_cast<unsigned char*>(out.data()), sha, SHA_DIGEST_LENGTH);
+    // Keep base64 padding — servers send it (RFC 6455 examples included).
+    std::string expected;
+    for (char c : out) {
+        if (c == '\0') break;
+        expected += c;
+    }
+
+    return expected == accept;
+}
 
 // ── WebSocketImpl ──────────────────────────────────────────────
 
@@ -165,7 +205,9 @@ private:
             ssl_ = SSL_new(ctx);
             SSL_set_fd(ssl_, fd_);
             SSL_set_tlsext_host_name(ssl_, host.c_str());
+            SSL_set1_host(ssl_, host.c_str());
             if (SSL_connect(ssl_) != 1) { closeSocket(); return false; }
+            if (SSL_get_verify_result(ssl_) != X509_V_OK) { closeSocket(); return false; }
         }
 
         // After handshake: short receive timeout so the read loop
@@ -178,7 +220,11 @@ private:
     static SSL_CTX* sharedCtx() {
         static SSL_CTX* ctx = [] {
             SSL_CTX* c = SSL_CTX_new(TLS_client_method());
-            if (c) SSL_CTX_set_min_proto_version(c, TLS1_2_VERSION);
+            if (c) {
+                SSL_CTX_set_min_proto_version(c, TLS1_2_VERSION);
+                SSL_CTX_set_verify(c, SSL_VERIFY_PEER, nullptr);
+                SSL_CTX_set_default_verify_paths(c);
+            }
             return c;
         }();
         return ctx;
@@ -295,7 +341,9 @@ private:
             headers += c;
             if (headers.size() >= 4 &&
                 headers.compare(headers.size() - 4, 4, "\r\n\r\n") == 0) {
-                handshakeOk = headers.find(" 101 ") != std::string::npos;
+                handshakeOk =
+                    headers.find(" 101 ") != std::string::npos &&
+                    validateAcceptKey(headers, key);
                 break;
             }
         }

@@ -261,8 +261,12 @@ void amp_ladder_digest(uint64_t chain_id, const char* contract_address,
 
     ampcore::Eip712TypedData td = ampcore::buildLadderTypedData(
         chain_id, contract_address ? contract_address : "",
-        match_id ? match_id : "", "1", placements,
-        transcript_hash ? transcript_hash : "", session_nonce);
+        match_id ? match_id : "",
+        // gameId is bytes32(1) per the contract typehash — the full hex
+        // form, NOT "1" (fromHex would eat the odd nibble → bytes32(0),
+        // producing a digest no other SDK or the server can recover).
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
+        placements, transcript_hash ? transcript_hash : "", session_nonce);
 
     std::vector<uint8_t> d = ampcore::computeEip712Digest(td);
     std::memcpy(out_digest, d.data(), 32);
