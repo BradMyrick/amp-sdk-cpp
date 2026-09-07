@@ -118,6 +118,7 @@ public:
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
+    std::unique_ptr<AmpWebSocket> ws_;
     std::string server_url_;
     std::string token_;
     std::string wallet_;

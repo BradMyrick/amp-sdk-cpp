@@ -10,9 +10,14 @@ For Unreal Engine, native C++ game servers, and embedded game clients. Pure C++1
 amp-sdk-cpp/
 ├── include/amp/           # Public headers (pure C++17)
 │   ├── types.hpp          # Interfaces, models, crypto declarations
-│   └── client.hpp         # AMPClient + AmpWebSocket
+│   ├── client.hpp         # AMPClient + AmpWebSocket
+│   ├── http_client.hpp    # Minimal REST client (POSIX + OpenSSL TLS)
+│   └── signers/private_key_signer.hpp  # OpenSSL secp256k1 signer
 ├── src/
-│   └── crypto/crypto.cpp  # Keccak-256, EIP-712, commit hashes
+│   ├── crypto/crypto.cpp  # Keccak-256, EIP-712, commit hashes
+│   ├── http_client.cpp    # REST transport
+│   ├── websocket.cpp      # RFC 6455 client w/ auto-reconnect-safe stop
+│   └── client.cpp         # Full API wiring
 ├── third_party/nayuki/    # Keccak-256 (MIT, header-only)
 ├── examples/
 │   └── quick_start.cpp    # Full lifecycle walkthrough
@@ -69,6 +74,8 @@ For Unreal Engine games, the `AmpUnreal` plugin (coming soon) wraps this SDK wit
 
 ## Build
 
+Requires CMake 3.16+, a C++17 compiler, and OpenSSL (dev headers).
+
 ```bash
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
@@ -76,9 +83,19 @@ make -j$(nproc)
 ./amp-tests
 ```
 
+### Live integration tests
+
+Against the production matchmaker (needs a funded test key — see
+`AMP_TEST_KEY` / `AMP_TEST_KEY_FILE` env vars):
+
+```bash
+cmake .. -DAMP_LIVE_TESTS=ON && make
+./amp-tests
+```
+
 ## Tests
 
-31 tests covering:
+51 tests covering:
 - Keccak-256 known vectors (empty, "abc") + determinism
 - Salt generation (format, uniqueness)
 - Report message construction
@@ -86,6 +103,9 @@ make -j$(nproc)
 - EIP-712 typed data construction (domain, fields, message)
 - EIP-712 digest (size, determinism, chain sensitivity)
 - Hex encoding roundtrips
+- OpenSSL secp256k1 signer: address derivation (canonical vectors),
+  signature format, v ∈ {27,28}, malformed-key rejection
+- Live (opt-in): login, games, queue, bot match, report, WebSocket hello
 
 ## License
 

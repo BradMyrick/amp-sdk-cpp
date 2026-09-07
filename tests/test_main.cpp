@@ -6,10 +6,22 @@
  */
 
 #include "amp/types.hpp"
+#include "amp/client.hpp"
+#include "amp/signers/private_key_signer.hpp"
 #include <cassert>
 #include <cstdio>
+#include <cctype>
 #include <set>
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+#ifdef AMP_LIVE_TESTS
+#include <cstdlib>
+#endif
 
 using namespace amp;
 using namespace amp::crypto;
@@ -167,6 +179,146 @@ int main() {
         auto h0 = computeCommitHash("0x95CC495dF579981d3Ffa4a8f77B93A17563E077a", 0, "");
         CHECK("zero stake + empty salt works", h0.length() == 66);
     }
+
+    // ── Signer (OpenSSL secp256k1) ────────────────────────────
+    {
+        printf("\n── PrivateKeySigner ──\n");
+
+        // Well-known vector: privkey = 1 → 0x7E5F...
+        PrivateKeySigner signer("0x0000000000000000000000000000000000000000000000000000000000000001");
+        std::string addr = signer.getAddress();
+        CHECK("privkey=1 derives canonical address",
+              strcasecmp(addr.c_str() + 2, "7E5F4552091A69125d5DfCb7b8C2659029395Bdf") == 0);
+
+        auto sig = signer.signPersonalSign("hello");
+        CHECK("signature is 0x + 130 hex chars", sig.size() == 132 && sig.substr(0, 2) == "0x");
+
+        // Valid hex
+        bool validHex = true;
+        for (char c : sig.substr(2))
+            if (!isxdigit(static_cast<unsigned char>(c))) validHex = false;
+        CHECK("signature is valid hex", validHex);
+
+        int v = std::stoi(sig.substr(130, 2), nullptr, 16);
+        CHECK("v is 27 or 28", v == 27 || v == 28);
+
+        // Different messages → different signatures
+        auto sig2 = signer.signPersonalSign("hello2");
+        CHECK("signatures are message-sensitive", sig != sig2);
+
+        // EIP-712 signature is well-formed
+        auto td = buildLadderTypedData(
+            43113, "0xcabf7b626172fE55d54f03c346563671AbcC77f7",
+            "0x" + std::string(64, 'a'), "0x" + std::string(63, '0') + "1",
+            {"0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"},
+            "0x" + std::string(64, 'b'), 1);
+        auto tsig = signer.signTypedData(td);
+        CHECK("typed-data signature well-formed", tsig.size() == 132 && tsig.substr(0, 2) == "0x");
+
+        // Rejects malformed keys
+        bool threw = false;
+        try { PrivateKeySigner bad("0x1234"); } catch (const std::invalid_argument&) { threw = true; }
+        CHECK("rejects short private key", threw);
+    }
+
+#ifdef AMP_LIVE_TESTS
+    // ── Live integration (production matchmaker) ─────────────
+    {
+        printf("\n── Live Integration ──\n");
+
+        const char* serverEnv = getenv("AMP_SERVER");
+        const char* keyEnv = getenv("AMP_TEST_KEY");
+        std::string server = serverEnv ? serverEnv : "https://amp.playwithamp.xyz";
+        std::string key = keyEnv ? keyEnv : "";
+
+        if (key.empty()) {
+            // Fall back to the local e2e wallet file
+            std::ifstream kf(getenv("AMP_TEST_KEY_FILE")
+                             ? getenv("AMP_TEST_KEY_FILE")
+                             : "/tmp/opencode/e2e-wallets/wallets.json");
+            if (kf.good()) {
+                std::stringstream ss; ss << kf.rdbuf();
+                std::string j = ss.str();
+                auto pos = j.find("\"key\"");
+                auto colon = j.find(':', pos);
+                auto q1 = j.find('"', colon + 1);
+                auto q2 = j.find('"', q1 + 1);
+                key = j.substr(q1 + 1, q2 - q1 - 1);
+            }
+        }
+        CHECK("have a test key", !key.empty());
+        if (!key.empty()) {
+            try {
+                auto liveSigner = std::make_shared<PrivateKeySigner>(key);
+                AMPClient client(server, liveSigner);
+
+                // Login (challenge → EIP-191 sign → verify)
+                Player p = client.login();
+                CHECK("login returns wallet",
+                      strcasecmp(p.wallet.c_str() + 2,
+                                 liveSigner->getAddress().c_str() + 2) == 0);
+                CHECK("client is authenticated", client.authenticated());
+
+                // Games list
+                std::string gamesJson = client.games();
+                CHECK("games() returns a list", gamesJson.find("\"games\"") != std::string::npos);
+
+                // Me
+                std::string meJson = client.me();
+                CHECK("me() returns wallet", meJson.find("\"wallet\"") != std::string::npos);
+
+                // Queue join + status + leave
+                std::string joinJson = client.joinQueue("amp-tactics", "ranked-1v1");
+                CHECK("joinQueue accepted", joinJson.find("\"ticketId\"") != std::string::npos ||
+                                             joinJson.find("\"queueDepth\"") != std::string::npos);
+                std::string statusJson = client.queueStatus();
+                CHECK("queueStatus works", !statusJson.empty());
+                std::string leaveJson = client.leaveQueue();
+                CHECK("leaveQueue works", leaveJson.find("\"left\"") != std::string::npos);
+
+                // Play a bot and report the result
+                std::string botJson = client.playBot();
+                auto matchId = [&]() -> std::string {
+                    auto pos = botJson.find("\"matchId\"");
+                    if (pos == std::string::npos) return "";
+                    auto colon = botJson.find(':', pos);
+                    auto q1 = botJson.find('"', colon + 1);
+                    auto q2 = botJson.find('"', q1 + 1);
+                    return botJson.substr(q1 + 1, q2 - q1 - 1);
+                }();
+                CHECK("playBot returns a matchId", !matchId.empty());
+
+                if (!matchId.empty()) {
+                    std::string m = client.getMatch(matchId);
+                    CHECK("getMatch works", m.find("\"id\"") != std::string::npos ||
+                                             m.find("matchId") != std::string::npos);
+
+                    std::string rep = client.reportMatch(matchId, "win");
+                    CHECK("reportMatch accepted", rep.find("\"state\"") != std::string::npos);
+                }
+
+                // WebSocket: connect and expect a hello
+                {
+                    AmpWebSocket& ws = client.events();
+                    std::atomic<bool> gotHello{false};
+                    ws.on(EventType::Hello, [&](const std::string&) { gotHello = true; });
+                    ws.connect();
+                    // Wait up to 5s for hello
+                    for (int i = 0; i < 50 && !gotHello; i++)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    CHECK("WebSocket receives hello event", gotHello);
+                    ws.close();
+                }
+
+                client.logout();
+                CHECK("logout clears auth", !client.authenticated());
+            } catch (const Error& e) {
+                printf("  live error: [%s] %s\n", e.code.c_str(), e.message.c_str());
+                CHECK("live flow completed without errors", false);
+            }
+        }
+    }
+#endif
 
     // ── Summary ───────────────────────────────────────────────
     printf("\n═════════════════════════════════════════════════\n");
