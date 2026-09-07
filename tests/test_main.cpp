@@ -180,6 +180,24 @@ int main() {
         CHECK("zero stake + empty salt works", h0.length() == 66);
     }
 
+    // ── EIP-712 golden digest (ethers-verified) ───────────────
+    {
+        printf("\n── EIP-712 Golden Digest ──\n");
+
+        auto td = buildLadderTypedData(
+            43113,
+            "0xcabf7b626172fE55d54f03c346563671AbcC77f7",
+            "0x" + std::string(64, 'a'),
+            "0x" + std::string(63, '0') + "1",
+            {"0x95CC495dF579981d3Ffa4a8f77B93A17563E077a",
+             "0x79aDcEF0E2bdc030f5906aA80C6B50C3712c0064"},
+            "0x" + std::string(64, 'b'),
+            42);
+        auto digestHex = toHex(computeEip712Digest(td).data(), 32);
+        CHECK("EIP-712 digest matches ethers reference",
+              digestHex == "0x7e3467e6d14daf2c2ba195a1147c550a480c30c867c202b7b02e385a8e48123f");
+    }
+
     // ── Cross-SDK golden vector ───────────────────────────────
     {
         printf("\n── Cross-SDK Golden Vector ──\n");

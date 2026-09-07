@@ -130,8 +130,18 @@ std::vector<uint8_t> encodeFieldValue(const TypedDataField& field, const std::st
         return padRight32(fromHex(value));
     }
     if (field.type == "uint256" || field.type == "uint") {
+        // No-throw integer parse (UE builds with -fno-exceptions)
         uint64_t val = 0;
-        try { val = std::stoull(value); } catch (...) {}
+        {
+            uint64_t acc = 0;
+            bool ok = !value.empty();
+            for (char c : value) {
+                if (c < '0' || c > '9') { ok = false; break; }
+                if (acc > (UINT64_MAX - (c - '0')) / 10) { ok = false; break; }
+                acc = acc * 10 + static_cast<uint64_t>(c - '0');
+            }
+            if (ok) val = acc;
+        }
         return toWord32(val);
     }
     if (field.type == "address") {

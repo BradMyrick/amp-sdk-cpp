@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "AMP — Avalanche Matchmaking Protocol",
+	"Description": "Ranked matchmaking, skill ratings, parties, staked N-player lobbies, and on-chain settlement for Unreal Engine. One gasless signature per player; the game never touches crypto complexity.",
+	"Category": "Networking",
+	"CreatedBy": "AMP",
+	"CreatedByURL": "https://playwithamp.xyz",
+	"DocsURL": "https://playwithamp.xyz/docs",
+	"MarketplaceURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "AmpUnreal",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64", "Mac", "Linux", "Android", "IOS" ]
+		}
+	]
+}
