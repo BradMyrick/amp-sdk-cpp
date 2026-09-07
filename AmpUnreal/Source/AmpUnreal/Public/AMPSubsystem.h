@@ -10,6 +10,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "Engine/TimerHandle.h"
 #include "AMPTypes.h"
 #include "AMPSigner.h"
 #include "AMPSubsystem.generated.h"

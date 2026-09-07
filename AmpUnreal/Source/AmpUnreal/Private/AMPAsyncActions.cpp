@@ -3,7 +3,7 @@
 #include "AMPAsyncActions.h"
 #include "AMPSubsystem.h"
 #include "AmpUnreal.h"
-#include "AmpCore.h"
+#include "AmpCoreBridge.h"
 
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -25,7 +25,7 @@ int64 JsonInt64Of(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key)
 {
 	if (!Obj.IsValid()) return 0;
 	int64 N = 0;
-	if (Obj->TryGetNumberField<int64>(Key, N)) return N;
+	if (Obj->TryGetNumberField(Key, N)) return N;
 	FString S;
 	if (Obj->TryGetStringField(Key, S)) return FCString::Atoi64(*S);
 	return 0;
@@ -293,35 +293,39 @@ void UAMPGetGamesAction::DispatchOk(const FString& RawJson)
 	}
 
 	TArray<FAMPGameInfo> Games;
-	TArray<TSharedPtr<FJsonValue>> RawGames;
-	if (Obj->TryGetArrayField(TEXT("games"), RawGames))
+	const TArray<TSharedPtr<FJsonValue>>* RawGames = nullptr;
+	if (Obj->TryGetArrayField(TEXT("games"), RawGames) && RawGames)
 	{
-		for (const TSharedPtr<FJsonValue>& Gv : RawGames)
+		for (const TSharedPtr<FJsonValue>& Gv : *RawGames)
 		{
-			TSharedPtr<FJsonObject> G;
-			if (Gv.IsValid() && Gv->TryGetObject(G) && G.IsValid())
+			TSharedPtr<FJsonObject> G = Gv.IsValid() ? Gv->AsObject() : nullptr;
+			if (!G.IsValid())
 			{
-				FAMPGameInfo GInfo;
-				GInfo.Id = JsonStrOf(G, TEXT("id"));
-				GInfo.Name = JsonStrOf(G, TEXT("name"));
-				TArray<TSharedPtr<FJsonValue>> RawRules;
-				if (G->TryGetArrayField(TEXT("rulesets"), RawRules))
-				{
-					for (const TSharedPtr<FJsonValue>& Rv : RawRules)
-					{
-						TSharedPtr<FJsonObject> R;
-						if (Rv.IsValid() && Rv->TryGetObject(R) && R.IsValid())
-						{
-							FAMPRuleset Rs;
-							Rs.Id = JsonStrOf(R, TEXT("id"));
-							Rs.Name = JsonStrOf(R, TEXT("name"));
-							Rs.QueueDepth = static_cast<int32>(JsonInt64Of(R, TEXT("queueDepth")));
-							GInfo.Rulesets.Add(Rs);
-						}
-					}
-				}
-				Games.Add(GInfo);
+				continue;
 			}
+
+			FAMPGameInfo GInfo;
+			GInfo.Id = JsonStrOf(G, TEXT("id"));
+			GInfo.Name = JsonStrOf(G, TEXT("name"));
+
+			const TArray<TSharedPtr<FJsonValue>>* RawRules = nullptr;
+			if (G->TryGetArrayField(TEXT("rulesets"), RawRules) && RawRules)
+			{
+				for (const TSharedPtr<FJsonValue>& Rv : *RawRules)
+				{
+					TSharedPtr<FJsonObject> R = Rv.IsValid() ? Rv->AsObject() : nullptr;
+					if (!R.IsValid())
+					{
+						continue;
+					}
+					FAMPRuleset Rs;
+					Rs.Id = JsonStrOf(R, TEXT("id"));
+					Rs.Name = JsonStrOf(R, TEXT("name"));
+					Rs.QueueDepth = static_cast<int32>(JsonInt64Of(R, TEXT("queueDepth")));
+					GInfo.Rulesets.Add(Rs);
+				}
+			}
+			Games.Add(GInfo);
 		}
 	}
 	OnSuccess.Broadcast(Games);
@@ -337,12 +341,6 @@ UAMPMeAction* UAMPMeAction::AMPMe(UObject* WorldContextObject)
 	Node->RegisterWithGameInstance(WorldContextObject);
 	Node->QueueRequest(TEXT("GET"), TEXT("/v1/me"), FString());
 	return Node;
-}
-
-void UAMPMeAction::DispatchOk(const FString& RawJson)
-{
-	OnSuccess.Broadcast(RawJson);
-	SetReadyToDestroy();
 }
 
 UAMPGetPlayerAction* UAMPGetPlayerAction::AMPGetPlayer(UObject* WorldContextObject, FString Wallet)
@@ -455,10 +453,10 @@ void UAMPWaitForMatchAction::Activate()
 
 	// REST fallback + timeout via the world timer (game thread)
 	FTimerManager& Tm = GI->GetTimerManager();
-	Tm.SetTimer(PollHandle, FTimerDelegate::CreateUObject(this, &UAMPWaitForMatchAction::CheckOnce), 2.0f, true);
+	Tm.SetTimer(AMP_PollTimer, FTimerDelegate::CreateUObject(this, &UAMPWaitForMatchAction::CheckOnce), 2.0f, true);
 	if (Timeout > 0)
 	{
-		Tm.SetTimer(TimeoutHandle, FTimerDelegate::CreateUObject(this, &UAMPWaitForMatchAction::TimedOut), Timeout, false);
+		Tm.SetTimer(AMP_TimeoutTimer, FTimerDelegate::CreateUObject(this, &UAMPWaitForMatchAction::TimedOut), Timeout, false);
 	}
 	CheckOnce(); // immediate check, don't wait 2 s
 }
@@ -507,11 +505,14 @@ void UAMPWaitForMatchAction::Cleanup()
 	{
 		Subsystem->OnMatchFound.RemoveDynamic(this, &UAMPWaitForMatchAction::HandleMatchFoundProxy);
 	}
-	if (UGameInstance* GI = GetGameInstance())
+	if (UWorld* World = GEngine ? GEngine->GetWorldFromContextObject(WorldCtx.Get(), EGetWorldErrorMode::LogAndReturnNull) : nullptr)
 	{
-		FTimerManager& Tm = GI->GetTimerManager();
-		Tm.ClearTimer(PollHandle);
-		Tm.ClearTimer(TimeoutHandle);
+		if (UGameInstance* GI = World->GetGameInstance())
+		{
+			FTimerManager& Tm = GI->GetTimerManager();
+			Tm.ClearTimer(AMP_PollTimer);
+			Tm.ClearTimer(AMP_TimeoutTimer);
+		}
 	}
 }
 
@@ -561,12 +562,6 @@ UAMPReportMatchAction* UAMPReportMatchAction::AMPReportMatch(UObject* WorldConte
 	Node->QueueRequest(TEXT("POST"), FString::Printf(TEXT("/v1/matches/%s/report"), *MatchId),
 		BuildBody({{TEXT("result"), ResultStr}, {TEXT("signature"), Signature}}, {}));
 	return Node;
-}
-
-void UAMPReportMatchAction::DispatchOk(const FString& RawJson)
-{
-	OnSuccess.Broadcast(RawJson);
-	SetReadyToDestroy();
 }
 
 // ── Parties ──────────────────────────────────────────────────────
@@ -667,17 +662,17 @@ UAMPMultiCommitAction* UAMPMultiCommitAction::AMPMultiCommit(UObject* WorldConte
 
 	// Generate the salt locally; only keccak256(wallet ‖ stake ‖ salt) goes
 	// on the wire until the reveal — nobody can front-run your lobby slot.
-	std::string Salt = ampcore::generateSalt();
-	std::string CommitHash = ampcore::computeCommitHash(
-		std::string(TCHAR_TO_UTF8(*Sub->GetWallet())),
-		static_cast<uint64_t>(StakeWei),
-		Salt);
+	char Salt[67];
+	amp_generate_salt(Salt, sizeof(Salt));
+	char CommitHash[67];
+	amp_commit_hash(TCHAR_TO_UTF8(*Sub->GetWallet()),
+		static_cast<uint64_t>(StakeWei), Salt, CommitHash, sizeof(CommitHash));
 
-	Node->PendingSalt = UTF8_TO_TCHAR(Salt.c_str());
+	Node->PendingSalt = UTF8_TO_TCHAR(Salt);
 
 	Node->QueueRequest(TEXT("POST"), TEXT("/v1/multi/commit"),
 		BuildBody({{TEXT("gameId"), GameId},
-		           {TEXT("commitHash"), UTF8_TO_TCHAR(CommitHash.c_str())}},
+		           {TEXT("commitHash"), UTF8_TO_TCHAR(CommitHash)}},
 		          {{TEXT("stakeWei"), StakeWei}, {TEXT("lobbySize"), static_cast<int64>(LobbySize)}}));
 	return Node;
 }

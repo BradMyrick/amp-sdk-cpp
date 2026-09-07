@@ -3,15 +3,12 @@
 // Two paths, matching every AMP SDK:
 //   1. Self-custody: implement FAMPSigner and bridge to your wallet
 //      plugin / platform wallet (console, mobile, extension).
-//   2. Dev & dedicated servers: FAMPPrivateKeySigner (OpenSSL).
+//   2. Dev & dedicated servers: FAMPPrivateKeySigner (via the engine-free
+//      OpenSSL bridge — no engine/OpenSSL header collisions).
 
 #pragma once
 
 #include "CoreMinimal.h"
-
-// Forward-declared to keep this Public header independent of the
-// vendored core (Private/AmpCore).
-namespace ampcore { struct Eip712TypedData; }
 
 /**
  * Abstract signer. Implement this to connect a real wallet.
@@ -34,8 +31,8 @@ public:
 	virtual bool SignPersonalSign(const FString& Message, FString& OutSignature, FString& OutError) const = 0;
 
 	/**
-	 * Sign EIP-712 typed data (built by AmpCore::buildLadderTypedData).
-	 * @param OutSignature 65-byte r‖s‖v hex (0x + 130 chars).
+	 * Sign a raw 32-byte digest (the EIP-712 path — the subsystem computes
+	 * the MultiplayerLadder digest and hands you the bytes).
 	 */
-	virtual bool SignTypedData(const ampcore::Eip712TypedData& TypedData, FString& OutSignature, FString& OutError) const = 0;
+	virtual bool SignDigest32(const uint8_t Digest[32], FString& OutSignature, FString& OutError) const = 0;
 };

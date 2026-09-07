@@ -8,6 +8,7 @@
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintAsyncActionBase.h"
+#include "Engine/TimerHandle.h"
 #include "AMPTypes.h"
 #include "AMPAsyncActions.generated.h"
 
@@ -236,8 +237,8 @@ private:
 	void Cleanup();
 
 	float Timeout = 30.f;
-	FTimerHandle PollHandle;
-	FTimerHandle TimeoutHandle;
+	FTimerHandle AMP_PollTimer;
+	FTimerHandle AMP_TimeoutTimer;
 	bool bDone = false;
 	TWeakObjectPtr<UAMPSubsystem> Subsystem;
 	TWeakObjectPtr<UObject> WorldCtx;

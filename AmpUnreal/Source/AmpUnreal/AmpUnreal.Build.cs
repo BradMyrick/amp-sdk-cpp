@@ -26,9 +26,5 @@ public class AmpUnreal : ModuleRules
 			"OpenSSL"
 		});
 
-		// Vendored, engine-free protocol core (see Private/AmpCore).
-		// Compiled with UE's -fno-exceptions -fno-rtti flags and validated
-		// against cross-SDK golden vectors — do not add engine types here.
-		PrivateIncludePaths.Add("Private/AmpCore");
 	}
 }

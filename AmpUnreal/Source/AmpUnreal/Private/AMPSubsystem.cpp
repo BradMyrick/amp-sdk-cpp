@@ -3,7 +3,7 @@
 #include "AMPSubsystem.h"
 #include "AmpUnreal.h"
 #include "AMPPrivateKeySigner.h"
-#include "AmpCore.h"
+#include "AmpCoreBridge.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
@@ -13,19 +13,9 @@
 #include "Json.h"
 #include "Async/Async.h"
 #include "TimerManager.h"
+#include "Engine/GameInstance.h"
 
 namespace {
-
-std::string ToStdString(const FString& S)
-{
-	TArray<char> Utf8 = StringCast<ANSICHAR>(*S, S.Len()).Get();
-	return std::string(Utf8.GetData(), static_cast<size_t>(Utf8.Num()));
-}
-
-FString FromStdString(const std::string& S)
-{
-	return FString(UTF8_TO_TCHAR(S.c_str()));
-}
 
 /** Extract a string field from a JSON object. */
 FString JsonStr(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key)
@@ -39,7 +29,7 @@ int64 JsonInt64(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Key)
 {
 	if (!Obj.IsValid()) return 0;
 	int64 N = 0;
-	if (Obj->TryGetNumberField<int64>(Key, N)) return N;
+	if (Obj->TryGetNumberField(Key, N)) return N;
 	FString S;
 	if (Obj->TryGetStringField(Key, S)) return FCString::Atoi64(*S);
 	return 0;
@@ -128,23 +118,27 @@ bool UAMPSubsystem::SignLadderReport(
 		return false;
 	}
 
-	std::vector<std::string> Placements;
-	Placements.reserve(RankedWallets.Num());
-	for (const FString& W : RankedWallets)
+	// Digest via the engine-free bridge (C ABI — no std types in UE TUs).
+	// Keep the UTF-8 conversions alive for the duration of the call.
+	TArray<TArray<ANSICHAR>> PlacementBuffers;
+	TArray<const char*> PlacementPtrs;
+	PlacementBuffers.SetNum(RankedWallets.Num());
+	PlacementPtrs.SetNum(RankedWallets.Num());
+	for (int32 i = 0; i < RankedWallets.Num(); i++)
 	{
-		Placements.push_back(ToStdString(W));
+		FTCHARToUTF8 Utf8(*RankedWallets[i]);
+		PlacementBuffers[i] = TArray<ANSICHAR>(Utf8.Get(), Utf8.Length());
+		PlacementPtrs[i] = reinterpret_cast<const char*>(PlacementBuffers[i].GetData());
 	}
 
-	ampcore::Eip712TypedData Td = ampcore::buildLadderTypedData(
-		static_cast<uint64_t>(ChainId),
-		ToStdString(ContractAddress),
-		ToStdString(MatchId),
-		"1",
-		Placements,
-		ToStdString(TranscriptHash),
-		static_cast<uint64_t>(SessionNonce));
+	uint8_t digest[32];
+	amp_ladder_digest(
+		static_cast<uint64_t>(ChainId), TCHAR_TO_UTF8(*ContractAddress),
+		TCHAR_TO_UTF8(*MatchId), PlacementPtrs.GetData(),
+		PlacementPtrs.Num(),
+		TCHAR_TO_UTF8(*TranscriptHash), static_cast<uint64_t>(SessionNonce), digest);
 
-	return Signer->SignTypedData(Td, OutSignature, OutError);
+	return Signer->SignDigest32(digest, OutSignature, OutError);
 }
 
 bool UAMPSubsystem::SignExitCert(
@@ -161,9 +155,10 @@ bool UAMPSubsystem::SignExitCert(
 		return false;
 	}
 
-	std::string Message = ampcore::buildExitCertMessage(
-		ToStdString(MatchId), Rank, static_cast<uint64_t>(ExitFrame), ToStdString(StateHash));
-	return Signer->SignPersonalSign(FromStdString(Message), OutSignature, OutError);
+	char message[512];
+	amp_exit_cert_message(TCHAR_TO_UTF8(*MatchId), Rank,
+		static_cast<uint64_t>(ExitFrame), TCHAR_TO_UTF8(*StateHash), message, sizeof(message));
+	return Signer->SignPersonalSign(UTF8_TO_TCHAR(message), OutSignature, OutError);
 }
 
 // ── REST ────────────────────────────────────────────────────────
@@ -178,7 +173,7 @@ void UAMPSubsystem::SendRequest(
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Req = Http->CreateRequest();
 
 	FString Url = ServerUrl;
-	while (Url.EndsWith(TEXT("/"))) Url.RemoveFromEnd(1);
+	while (Url.EndsWith(TEXT("/"))) Url.LeftChopInline(1, EAllowShrinking::No);
 	Url += Path;
 
 	Req->SetURL(Url);
@@ -232,11 +227,11 @@ void UAMPSubsystem::ConnectEvents()
 	}
 
 	FString Url = ServerUrl;
-	while (Url.EndsWith(TEXT("/"))) Url.RemoveFromEnd(1);
+	while (Url.EndsWith(TEXT("/"))) Url.LeftChopInline(1, EAllowShrinking::No);
 	Url = Url.Replace(TEXT("https://"), TEXT("wss://")).Replace(TEXT("http://"), TEXT("ws://"));
 	Url += FString::Printf(TEXT("/v1/ws?token=%s"), *Token);
 
-	Ws = FWebSocketModule::Get().CreateWebSocket(Url, TEXT("wss"));
+	Ws = FWebSocketsModule::Get().CreateWebSocket(Url, TEXT("wss"));
 
 	Ws->OnConnected().AddLambda([this]()
 	{
@@ -244,7 +239,7 @@ void UAMPSubsystem::ConnectEvents()
 		{
 			bWsConnected = true;
 			UE_LOG(LogAMP, Log, TEXT("AMP event stream connected (%s)"), *Wallet);
-			OnEventsConnected.BroadcastIfBound(Wallet);
+			OnEventsConnected.Broadcast(Wallet);
 		});
 	});
 
@@ -273,7 +268,7 @@ void UAMPSubsystem::ConnectEvents()
 			bWsConnected = false;
 			UE_LOG(LogAMP, Log, TEXT("AMP event stream closed (%d %s) clean=%d"),
 				Code, *Reason, bWasClean ? 1 : 0);
-			OnEventsClosed.BroadcastIfBound(Code);
+			OnEventsClosed.Broadcast(Code);
 
 			// Auto-reconnect after 5s unless we're shutting down or logged out.
 			if (!Token.IsEmpty())
@@ -315,12 +310,13 @@ void UAMPSubsystem::HandleWsMessage(const FString& MessageStr)
 	}
 
 	const FString Type = JsonStr(Msg, TEXT("type"));
-	TSharedPtr<FJsonObject> Data;
-	if (!Msg->TryGetObjectField(TEXT("data"), Data) || !Data.IsValid())
+	const TSharedPtr<FJsonObject>* DataPtr = nullptr;
+	TSharedPtr<FJsonObject> Fallback = Msg;
+	if (!Msg->TryGetObjectField(TEXT("data"), DataPtr) || !DataPtr || !(*DataPtr).IsValid())
 	{
-		Data = Msg;
+		DataPtr = &Fallback;
 	}
-	const TSharedPtr<FJsonObject>& D = Data;
+	const TSharedPtr<FJsonObject>& D = *DataPtr;
 
 	if (Type == TEXT("hello"))
 	{
@@ -333,7 +329,7 @@ void UAMPSubsystem::HandleWsMessage(const FString& MessageStr)
 		St.Depth = static_cast<int32>(JsonInt64(D, TEXT("depth")));
 		St.WaitedMs = JsonInt64(D, TEXT("waitedMs"));
 		St.SkillWindow = JsonDouble(D, TEXT("skillWindow"));
-		OnQueueStatus.BroadcastIfBound(St);
+		OnQueueStatus.Broadcast(St);
 	}
 	else if (Type == TEXT("match_found"))
 	{
@@ -342,15 +338,15 @@ void UAMPSubsystem::HandleWsMessage(const FString& MessageStr)
 		M.GameId = JsonStr(D, TEXT("gameId"));
 		M.RulesetId = JsonStr(D, TEXT("rulesetId"));
 		M.bBot = D->GetBoolField(TEXT("bot"));
-		TSharedPtr<FJsonObject> Opp;
-		if (D->TryGetObjectField(TEXT("opponent"), Opp) && Opp.IsValid())
+		const TSharedPtr<FJsonObject>* Opp = nullptr;
+		if (D->TryGetObjectField(TEXT("opponent"), Opp) && Opp && Opp->IsValid())
 		{
-			M.OpponentWallet = JsonStr(Opp, TEXT("wallet"));
-			M.OpponentRating = JsonDouble(Opp, TEXT("rating"));
+			M.OpponentWallet = JsonStr(*Opp, TEXT("wallet"));
+			M.OpponentRating = JsonDouble(*Opp, TEXT("rating"));
 		}
 		M.YourRating = JsonDouble(D, TEXT("yourRating"));
 		M.ExpiresAt = JsonStr(D, TEXT("expiresAt"));
-		OnMatchFound.BroadcastIfBound(M);
+		OnMatchFound.Broadcast(M);
 	}
 	else if (Type == TEXT("match_result"))
 	{
@@ -358,13 +354,13 @@ void UAMPSubsystem::HandleWsMessage(const FString& MessageStr)
 		R.MatchId = JsonStr(D, TEXT("matchId"));
 		R.Outcome = JsonStr(D, TEXT("outcome"));
 		R.bWon = D->GetBoolField(TEXT("won"));
-		TSharedPtr<FJsonObject> You;
-		if (D->TryGetObjectField(TEXT("you"), You) && You.IsValid())
+		const TSharedPtr<FJsonObject>* You = nullptr;
+		if (D->TryGetObjectField(TEXT("you"), You) && You && You->IsValid())
 		{
-			R.RatingBefore = JsonDouble(You, TEXT("ratingBefore"));
-			R.RatingAfter = JsonDouble(You, TEXT("ratingAfter"));
+			R.RatingBefore = JsonDouble(*You, TEXT("ratingBefore"));
+			R.RatingAfter = JsonDouble(*You, TEXT("ratingAfter"));
 		}
-		OnMatchResult.BroadcastIfBound(R);
+		OnMatchResult.Broadcast(R);
 	}
 	else if (Type == TEXT("multi_lobby_formed"))
 	{
@@ -373,18 +369,18 @@ void UAMPSubsystem::HandleWsMessage(const FString& MessageStr)
 		L.LobbySize = static_cast<int32>(JsonInt64(D, TEXT("lobbySize")));
 		L.StakeWei = JsonInt64(D, TEXT("stakeWei"));
 		L.SessionNonce = JsonInt64(D, TEXT("sessionNonce"));
-		OnMultiLobbyFormed.BroadcastIfBound(L);
+		OnMultiLobbyFormed.Broadcast(L);
 	}
 	else if (Type == TEXT("multi_result"))
 	{
-		OnMultiResult.BroadcastIfBound(MessageStr);
+		OnMultiResult.Broadcast(MessageStr);
 	}
 	else if (Type == TEXT("multi_cancelled"))
 	{
-		OnMultiCancelled.BroadcastIfBound(MessageStr);
+		OnMultiCancelled.Broadcast(MessageStr);
 	}
 	else if (Type == TEXT("match_update"))
 	{
-		OnMatchUpdate.BroadcastIfBound(MessageStr);
+		OnMatchUpdate.Broadcast(MessageStr);
 	}
 }
