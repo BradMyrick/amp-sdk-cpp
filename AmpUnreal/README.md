@@ -24,7 +24,7 @@ That's a complete ranked multiplayer loop. Everything else (parties, N-player ba
 2. Enable the **WebSockets** plugin (Edit → Plugins → search "WebSockets").
 3. Regenerate project files and build. Done — no crypto dependencies to install; OpenSSL ships with the engine.
 
-> Requires UE 5.1+ (developed against the UE5 API surface; supports Win64, Mac, Linux, Android, iOS).
+> Requires UE 5.1+. **Compiled and validated against UE 5.8.2 (Linux) via `RunUAT BuildPlugin`** — the CI's self-hosted `unreal` runner runs the same build on demand. Supports Win64, Mac, Linux, Android, iOS.
 
 ## Your first ranked match (3 minutes)
 
