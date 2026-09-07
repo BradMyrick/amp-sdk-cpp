@@ -304,6 +304,23 @@ private:
     }
 
     void runLoop() {
+        // Auto-reconnect: drops are retried with capped backoff until the
+        // user calls close(). A fresh handshake re-authenticates the token.
+        int backoffMs = 1000;
+        while (running_.load()) {
+            if (runOnce()) {
+                backoffMs = 1000; // clean session — reset backoff
+            }
+            if (!running_.load()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
+            backoffMs = std::min(backoffMs * 2, 15000);
+        }
+        connected_ = false;
+    }
+
+    /// One connection attempt + pump. Returns true when the session ran
+    /// cleanly (handshake completed), false when it never connected.
+    bool runOnce() {
         auto parts = parseWsUrl(url_);
         std::string path = parts.path;
         if (path.find('?') == std::string::npos)
@@ -311,7 +328,7 @@ private:
         else
             path += "&token=" + token_;
 
-        if (!tcpConnect(parts.host, parts.port, parts.tls)) return;
+        if (!tcpConnect(parts.host, parts.port, parts.tls)) return false;
 
         // Handshake
         std::random_device rd;
@@ -330,7 +347,7 @@ private:
         req << "\r\n";
 
         if (!sendRaw(reinterpret_cast<const uint8_t*>(req.str().c_str()), req.str().size()))
-            return;
+            return false;
 
         // Read until end of headers (timeout-tolerant via recvRaw)
         std::string headers;
@@ -347,7 +364,7 @@ private:
                 break;
             }
         }
-        if (!handshakeOk) return;
+        if (!handshakeOk) return false;
 
         connected_ = true;
 
@@ -395,13 +412,12 @@ private:
                     break;
                 case 0x8: // close
                     sendFrame(0x8, "");
-                    running_ = false;
                     break;
                 default:
                     break;
             }
         }
-        connected_ = false;
+        return true; // a real session ran; reconnect if still running
     }
 
     void dispatch(const std::string& json) {
