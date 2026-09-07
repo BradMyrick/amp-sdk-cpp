@@ -117,7 +117,7 @@ All events fire **on the game thread** — bind directly to widgets and gameplay
 [/Script/AmpUnreal.AMPSubsystem]
 ServerUrl=https://amp.playwithamp.xyz
 ChainId=43113
-ContractAddress=0xcabf7b626172fE55d54f03c346563671AbcC77f7
+ContractAddress=0x3BBb1812Ccafc4a8c849BfA340174a271e43B7D1
 ```
 
 ## What's inside (for engine-source readers)

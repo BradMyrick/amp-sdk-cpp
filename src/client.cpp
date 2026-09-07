@@ -258,7 +258,7 @@ std::string AMPClient::multiReport(const std::string& matchId,
 
         auto typedData = crypto::buildLadderTypedData(
             chainId,
-            contractAddress.empty() ? "0xcabf7b626172fE55d54f03c346563671AbcC77f7" : contractAddress,
+            contractAddress.empty() ? "0x3BBb1812Ccafc4a8c849BfA340174a271e43B7D1" : contractAddress,
             matchId,
             std::string("0x") + std::string(63, '0') + "1",
             placements,

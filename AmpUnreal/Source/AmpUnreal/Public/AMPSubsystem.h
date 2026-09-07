@@ -51,7 +51,7 @@ public:
 
 	/** Deployed AMPMultiplayer contract for ladder signatures. */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "AMP")
-	FString ContractAddress = TEXT("0xcabf7b626172fE55d54f03c346563671AbcC77f7");
+	FString ContractAddress = TEXT("0x3BBb1812Ccafc4a8c849BfA340174a271e43B7D1");
 
 	// ── Session state ───────────────────────────────────────
 
