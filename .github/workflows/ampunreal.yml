@@ -7,6 +7,10 @@ on:
     paths: ["AmpUnreal/**", ".github/workflows/ampunreal.yml"]
   workflow_dispatch:
 
+env:
+  # Self-hosted runners provide this instead; used by the engine job.
+  UNREAL_ROOT: /home/kodr/UnrealEngine/Engine
+
 jobs:
   # Fast, always runs: the vendored protocol core under UE build flags
   ampcore:
@@ -22,19 +26,24 @@ jobs:
             -o /tmp/ampcore_check
           /tmp/ampcore_check
 
-  # Full engine compile via UnrealBuildTool (game.ci engine image)
-  plugin:
-    name: Build plugin (Linux, UE 5.4)
-    runs-on: ubuntu-latest
-    container: ghcr.io/game-ci/unreal-engine:5.4.3
+  # Full engine compile via UnrealBuildTool. Runs on a self-hosted runner
+  # labeled `unreal` (any machine with UE installed + UNREAL_ROOT set).
+  # Trigger manually, or it runs automatically once the runner is online.
+  #
+  # Setup (one time):
+  #   1. Install UE for Linux (unrealengine.com/linux → download the zip)
+  #   2. Register this repo's self-hosted runner with the `unreal` label
+  #      (repo Settings → Actions → Runners → New self-hosted runner)
+  engine:
+    name: Build plugin (RunUAT, self-hosted)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, unreal]
     steps:
-      - name: Free disk space for the engine image
-        run: rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
       - uses: actions/checkout@v4
       - name: RunUAT BuildPlugin
         run: |
-          cd /home/ue4/UnrealEngine/Engine/Build/BatchFiles
-          ./RunUAT.sh BuildPlugin \
+          "$UNREAL_ROOT/Build/BatchFiles/RunUAT.sh" BuildPlugin \
             -Plugin="$GITHUB_WORKSPACE/AmpUnreal/AmpUnreal.uplugin" \
             -Package="/tmp/AmpUnreal-out" \
-            -TargetPlatforms=Linux
+            -TargetPlatforms=Linux \
+            -CookFlavor=
